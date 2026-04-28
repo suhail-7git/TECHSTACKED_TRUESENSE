@@ -1,24 +1,43 @@
-# Active Tremor-Cancellation Device 
+Multi-Sensor Integration: MPU6050 & VL53L0X with Arduino
+This project demonstrates how to interface and test two powerful I2C sensors using an Arduino Uno: the MPU6050 (6-Axis Accelerometer and Gyroscope) and the VL53L0X (Time-of-Flight Laser Distance Sensor).
+Overview
+The goal of this project is to provide a reliable testing suite for newly soldered sensors. By utilizing the I2C protocol, both sensors share the same data lines, allowing for a compact and efficient hardware setup.
+•	MPU6050: Measures orientation, tilt, and rotational velocity.
+•	VL53L0X: Measures precise distance up to 1.2m–2m using an invisible laser.
+________________________________________
+Hardware Requirements
+•	Microcontroller: Arduino Uno (or compatible)
+•	Sensors: * MPU6050 (GY-521 Breakout)
+o	VL53L0X (ToF Sensor)
+•	Wiring: Breadboard and Jumper Wires
+•	Tools: Soldering iron (for header pins)
+________________________________________
+ Wiring Diagram
+Both sensors use I2C Communication. On the Arduino Uno, this means they share the same pins (A4 and A5).
+Sensor Pin	Arduino Uno Pin	Description
+VCC / VIN	5V	Power Supply
+GND	GND	Ground
+SCL	A5	I2C Clock
+SDA	A4	I2C Data
+XSHUT (VL53L0X)	D4	Shutdown Pin (Used for hardware reset)
+Note: Ensure your solder joints are clean and "volcano-shaped." If the VL53L0X gives a constant reading (e.g., 53mm), clean the sensor lens and check for bridges on your solder points.
+________________________________________
+Software Setup
+1. Libraries Required
+Install the following via the Arduino Library Manager:
+•	Adafruit_VL53L0X
+•	Wire.h (Built-in)
+2. Configuration
+Ensure your Serial Monitor is set to 115200 Baud to view the output correctly.
+________________________________________
+Project Structure
+•	MPU6050_Test.ino: Basic script to verify raw accelerometer and gyroscope data.
+•	VL53L0X_Test.ino: Script to verify laser distance measurements and handle sensor resets.
+•	Combined_Sensor_Suite.ino: (Optional) A script that runs both sensors simultaneously.
+________________________________________
+ Troubleshooting
+•	Sensor not found? Run an "I2C Scanner" sketch to see if the addresses (0x68 for MPU6050 and 0x29 for VL53L0X) are detected.
+•	Frozen Readings? Check for "cold" solder joints. Re-heat the pin with your soldering iron and add a tiny bit of fresh solder.
+•	8191 Reading? This indicates a VL53L0X timeout. Ensure the protective plastic film is removed from the sensor face.
 
-## Project Description
-A low-cost, edge-computing embedded system designed to cancel out 4Hz to 8Hz hand tremors for patients with Parkinson's disease or essential tremors. By utilizing a Proportional-Derivative (PD) loop and a Complementary Filter, the system reads real-time IMU data and actuates micro-servos to keep the spoon perfectly level, replacing prohibitively expensive commercial solutions.
 
-## Tech Stack Used
-* **Microcontroller:** Arduino Uno
-* **Sensors:** MPU6050 (6-DOF IMU)
-* **Actuators:** 2x MG90S Metal-Gear Micro Servos
-* **Power:** 12V 5A Adapter stepped down via LM2596 Buck Converter
-* **Language:** C++ (Arduino IDE)
-
-## Setup Steps
-1. Connect the LM2596 Buck Converter to the 12V supply and tune the potentiometer to exactly `5.0V` using a multimeter.
-2. Wire the 5V output to the Red/Brown wires of the MG90S servos. 
-3. Wire the MPU6050 via I2C (`SDA` to `A4`, `SCL` to `A5`).
-4. Ensure the Buck Converter Ground and Arduino Ground are tied together.
-5. Upload `tremor_spoon.ino` to the Arduino.
-
-## Demo Instructions
-1. Place the device flat on the table and power it on. Allow 2 seconds for servos to center.
-2. Open the Arduino IDE **Serial Plotter** at `115200` baud rate to view the live stabilization graph.
-3. Pour a small amount of water into the spoon attachment.
-4. Pick up the handle and simulate a physical hand tremor. The servos will actuate inversely to keep the water from spilling.
