@@ -1,159 +1,223 @@
 #include <Wire.h>
-#include <Servo.h>
+#include <VL53L0X.h> // MUST BE THE POLOLU LIBRARY
+#include <Adafruit_PWMServoDriver.h>
 
-// --- Servo Setup ---
-Servo servoPitch; // Up/Down (Pin 9)
-Servo servoRoll;  // Left/Right (Pin 10)
+// ==========================================
+// CONFIGURATION DASHBOARD
+// ==========================================
+const bool SWAP_AXES = false;      
+const bool REVERSE_TREMOR = false; 
 
-const int pitchPin = 9;
-const int rollPin = 10;
+// --- PCA9685 Servo Driver ---
+Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
+#define SERVO_MIN 150 
+#define SERVO_MAX 600 
+#define NEUTRAL_POS 375 
+
+// --- VL53L0X Laser Array ---
+#define NUM_LASERS 5 // Change to 4 if D2 is still disconnected
+const int XSHUT_PINS[NUM_LASERS] = {2, 3, 4, 5, 6}; 
+const int LASER_ADDR[NUM_LASERS] = {0x30, 0x31, 0x32, 0x33, 0x34}; 
+VL53L0X lasers[NUM_LASERS];
+int currentLaser = 0; // For Round-Robin reading
 
 // --- MPU6050 Variables ---
 const int MPU_ADDR = 0x68; 
-int16_t accX, accY, accZ;
-int16_t gyroX, gyroY, gyroZ;
-
-// Calibration Offsets
 float gyroX_offset = 0, gyroY_offset = 0;
 float accPitch_offset = 0, accRoll_offset = 0;
-
 float roll = 0, pitch = 0;
 
-// --- Timing Variables ---
+// --- Timing & PD Control ---
 unsigned long prevTime;
 float dt;
 
-// --- PD Control Variables ---
-//  TUNE THESE TWO NUMBERS TONIGHT 
-float Kp = 1.0;  // Proportional (Muscle): Try 0.8 to 1.5
-float Kd = 0.08; // Derivative (Shock Absorber): Try 0.05 to 0.15
-
-float targetAngle = 0; // We want the spoon perfectly flat (0 degrees)
-
+// AGGRESSIVE STABILIZATION TUNING 
+float Kp = 1.0;  // Muscle: 1:1 reaction to the tremor
+float Kd = 0.25; // Shock Absorber: Smooths out the aggressive motor snaps
+float targetAngle = 0; 
 float errorPitch, prevErrorPitch, outputPitch;
-float errorRoll, prevErrorRoll, outputRoll;
 
 void setup() {
-  Serial.begin(115200); 
+  Serial.begin(115200);
+  delay(1000); 
+  Serial.println("\n--- NEUROGRIP FULL SYSTEM BOOTING ---");
   
-  // 1. Attach Servos and Center Them
-  servoPitch.attach(pitchPin);
-  servoRoll.attach(rollPin);
-  servoPitch.write(90);
-  servoRoll.write(90);
-
-  // 2. Wake up MPU6050
   Wire.begin();
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(0x6B); // Power management register
-  Wire.write(0);    // Wake up the MPU-6050
-  Wire.endTransmission(true);
-  
-  delay(1000); // Wait for physical servos to stop shaking
 
   // ==========================================
-  // 3. THE HACKATHON AUTO-CALIBRATION ROUTINE
+  // 1. SILENT SERVO BOOT
   // ==========================================
-  Serial.println("CALIBRATING... DO NOT TOUCH THE SPOON!");
-  
+  Serial.println("1. Starting PCA9685 (Silent Boot)...");
+  pwm.begin();
+  pwm.setPWMFreq(50); 
+  delay(100);
+
+  // ==========================================
+  // 2. BOOT SEQUENCE: VL53L0X LASERS
+  // ==========================================
+  Serial.println("2. Booting Laser Array...");
+  // Reset all lasers by pulling XSHUT LOW
+  for (int i = 0; i < NUM_LASERS; i++) {
+    pinMode(XSHUT_PINS[i], OUTPUT);
+    digitalWrite(XSHUT_PINS[i], LOW); 
+  }
+  delay(100);
+
+  // Turn them on ONE BY ONE and change their I2C address
+  for (int i = 0; i < NUM_LASERS; i++) {
+    Serial.print("   -> Turning on Laser on Pin "); Serial.println(XSHUT_PINS[i]);
+    digitalWrite(XSHUT_PINS[i], HIGH); 
+    delay(50); 
+    lasers[i].init();
+    lasers[i].setTimeout(500);
+    lasers[i].setAddress(LASER_ADDR[i]); 
+  }
+
+  // ==========================================
+  // 3. MPU6050 SILICON RESET & WAKE-UP
+  // ==========================================
+  Serial.println("3. Resetting MPU6050 Silicon...");
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x6B); 
+  Wire.write(0x80);    
+  Wire.endTransmission(true);
+  delay(150);
+
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x6B); 
+  Wire.write(0x00);    
+  Wire.endTransmission(true);
+  delay(100);
+
+  bool mpuReady = false;
+  while (!mpuReady) {
+    Wire.beginTransmission(MPU_ADDR);
+    Wire.write(0x3B);
+    Wire.endTransmission(true); 
+    Wire.requestFrom(MPU_ADDR, 14, true);
+
+    int16_t test_ax = Wire.read() << 8 | Wire.read();
+    int16_t test_ay = Wire.read() << 8 | Wire.read();
+    int16_t test_az = Wire.read() << 8 | Wire.read();
+    
+    if (test_ax != 0 && test_ax != -1) mpuReady = true;
+    delay(10);
+  }
+  Serial.println("   -> MPU is Awake!");
+
+  // ==========================================
+  // 4. MPU6050 AUTO-CALIBRATION
+  // ==========================================
+  Serial.println("4. Calibrating MPU... KEEP GLOVE FLAT & STILL!");
+  delay(500);
+
   for (int i = 0; i < 500; i++) {
     Wire.beginTransmission(MPU_ADDR);
     Wire.write(0x3B);
-    Wire.endTransmission(false);
+    Wire.endTransmission(true); 
     Wire.requestFrom(MPU_ADDR, 14, true);
 
-    accX = Wire.read() << 8 | Wire.read();
-    accY = Wire.read() << 8 | Wire.read();
-    accZ = Wire.read() << 8 | Wire.read();
-    Wire.read(); Wire.read(); // Skip temp
-    gyroX = Wire.read() << 8 | Wire.read();
-    gyroY = Wire.read() << 8 | Wire.read();
-    gyroZ = Wire.read() << 8 | Wire.read();
+    int16_t ax = Wire.read() << 8 | Wire.read();
+    int16_t ay = Wire.read() << 8 | Wire.read();
+    int16_t az = Wire.read() << 8 | Wire.read();
+    Wire.read(); Wire.read(); 
+    int16_t gx = Wire.read() << 8 | Wire.read();
+    int16_t gy = Wire.read() << 8 | Wire.read();
+    int16_t gz = Wire.read() << 8 | Wire.read();
 
-    float tempAccRoll = (atan2(accY, accZ) * 180 / PI);
-    float tempAccPitch = (atan2(-accX, sqrt(accY * accY + accZ * accZ)) * 180 / PI);
+    if (SWAP_AXES) { int16_t temp = ax; ax = ay; ay = temp; temp = gx; gx = gy; gy = temp; }
 
-    accRoll_offset += tempAccRoll;
-    accPitch_offset += tempAccPitch;
-    gyroX_offset += (gyroX / 131.0);
-    gyroY_offset += (gyroY / 131.0);
-    
+    // FLOAT CAST: Prevents Math Crash
+    float f_ax = ax; float f_ay = ay; float f_az = az;
+    accRoll_offset += (atan2(f_ay, f_az) * 180 / PI);
+    accPitch_offset += (atan2(-f_ax, sqrt(f_ay * f_ay + f_az * f_az)) * 180 / PI);
+    gyroX_offset += (gx / 131.0);
+    gyroY_offset += (gy / 131.0);
     delay(3);
   }
 
-  // Calculate the average offset
-  accRoll_offset /= 500.0;
-  accPitch_offset /= 500.0;
-  gyroX_offset /= 500.0;
-  gyroY_offset /= 500.0;
+  accRoll_offset /= 500.0; accPitch_offset /= 500.0;
+  gyroX_offset /= 500.0; gyroY_offset /= 500.0;
 
-  Serial.println("Calibration Complete!");
+  Serial.println("--- SYSTEM READY --- Starting NeuroGrip Engine.");
+  
+  // WAKE UP SERVOS STAGGERED BEFORE LOOP
+  for (int i = 0; i < 5; i++) {
+    pwm.setPWM(i, 0, NEUTRAL_POS); 
+    delay(200); 
+  }
   
   prevTime = millis();
 }
 
 void loop() {
-  // 1. Calculate Time Elapsed (dt)
   unsigned long currentTime = millis();
   dt = (currentTime - prevTime) / 1000.0; 
   prevTime = currentTime;
   if (dt <= 0) return; 
 
-  // 2. Read Raw Data from MPU6050
+  // ==========================================
+  // A. READ TREMOR (Fast Cycle)
+  // ==========================================
   Wire.beginTransmission(MPU_ADDR);
   Wire.write(0x3B); 
-  Wire.endTransmission(false);
+  Wire.endTransmission(true); 
   Wire.requestFrom(MPU_ADDR, 14, true); 
 
-  accX = Wire.read() << 8 | Wire.read();
-  accY = Wire.read() << 8 | Wire.read();
-  accZ = Wire.read() << 8 | Wire.read();
+  int16_t ax = Wire.read() << 8 | Wire.read();
+  int16_t ay = Wire.read() << 8 | Wire.read();
+  int16_t az = Wire.read() << 8 | Wire.read();
   Wire.read(); Wire.read(); 
-  gyroX = Wire.read() << 8 | Wire.read();
-  gyroY = Wire.read() << 8 | Wire.read();
-  gyroZ = Wire.read() << 8 | Wire.read();
+  int16_t gx = Wire.read() << 8 | Wire.read();
+  int16_t gy = Wire.read() << 8 | Wire.read();
+  int16_t gz = Wire.read() << 8 | Wire.read();
 
-  // 3. Math: Accelerometer Angles (Minus Offsets)
-  float rawAccRoll = (atan2(accY, accZ) * 180 / PI);
-  float rawAccPitch = (atan2(-accX, sqrt(accY * accY + accZ * accZ)) * 180 / PI);
-  
-  float accAngleRoll = rawAccRoll - accRoll_offset;
-  float accAnglePitch = rawAccPitch - accPitch_offset;
+  if (ax == 0 && ay == 0 && az == 0) return; 
 
-  // 4. Math: Gyro Rate (Minus Offsets)
-  float gyroRateRoll = (gyroX / 131.0) - gyroX_offset;
-  float gyroRatePitch = (gyroY / 131.0) - gyroY_offset;
+  if (SWAP_AXES) { int16_t temp = ax; ax = ay; ay = temp; temp = gx; gx = gy; gy = temp; }
 
-  // 5. Complementary Filter (The Anti-Drift Engine)
-  roll = 0.98 * (roll + gyroRateRoll * dt) + 0.02 * accAngleRoll;
+  float f_ax = ax; float f_ay = ay; float f_az = az;
+  float accAnglePitch = (atan2(-f_ax, sqrt(f_ay * f_ay + f_az * f_az)) * 180 / PI) - accPitch_offset;
+  float gyroRatePitch = (gy / 131.0) - gyroY_offset;
+
   pitch = 0.98 * (pitch + gyroRatePitch * dt) + 0.02 * accAnglePitch;
 
-  // 6. PD Control Loop: PITCH (Up/Down)
+  // ==========================================
+  // B. STABILIZATION MATH (PD Loop)
+  // ==========================================
   errorPitch = targetAngle - pitch;
   float dErrPitch = (errorPitch - prevErrorPitch) / dt;
   outputPitch = (Kp * errorPitch) + (Kd * dErrPitch);
   prevErrorPitch = errorPitch;
 
-  // 7. PD Control Loop: ROLL (Left/Right)
-  errorRoll = targetAngle - roll;
-  float dErrRoll = (errorRoll - prevErrorRoll) / dt;
-  outputRoll = (Kp * errorRoll) + (Kd * dErrRoll);
-  prevErrorRoll = errorRoll;
+  float compensation = REVERSE_TREMOR ? -outputPitch : outputPitch;
 
-  // 8. Command the Servos 
-  // IMPORTANT: If a servo moves the WRONG way, change the "+" to a "-" below!
-  int servoPitchPos = 90 + outputPitch; 
-  int servoRollPos = 90 + outputRoll;
+  if (abs(compensation) < 1.5) {
+    compensation = 0; 
+  }
 
-  // Safety Constraint: Stop the servos from destroying the plastic bracket
-  servoPitchPos = constrain(servoPitchPos, 30, 150);
-  servoRollPos = constrain(servoRollPos, 30, 150);
+  int pulseLength = map(90 + compensation, 0, 180, SERVO_MIN, SERVO_MAX);
+  pulseLength = constrain(pulseLength, SERVO_MIN, SERVO_MAX);
 
-  servoPitch.write(servoPitchPos);
-  servoRoll.write(servoRollPos);
+  for (int i = 0; i < 5; i++) {
+    pwm.setPWM(i, 0, pulseLength); 
+  }
 
-  // 9. Serial Output for the Live Graph Demo
-  Serial.print("Target_0_Deg:0,");
-  Serial.print("SpoonPitch:");
-  Serial.println(pitch);
+  // ==========================================
+  // C. READ FINGER THERAPY DATA (Round-Robin)
+  // ==========================================
+  int dist = lasers[currentLaser].readRangeSingleMillimeters();
+  
+  // Format output for the Serial Plotter
+  Serial.print("Target:0,");
+  Serial.print("Tremor:"); Serial.print(pitch); Serial.print(",");
+  Serial.print("Servo_Out:"); Serial.print(compensation); Serial.print(",");
+  
+  // Print the active laser reading
+  Serial.print("Finger_"); Serial.print(currentLaser + 1); Serial.print("_mm:"); 
+  Serial.println(dist);
+
+  // Cycle to the next laser for the next loop to keep the math blazing fast
+  currentLaser++;
+  if (currentLaser >= NUM_LASERS) currentLaser = 0;
 }
