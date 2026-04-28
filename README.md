@@ -1,4 +1,4 @@
-# Active Tremor-Cancellation Device 🥄
+# Active Tremor-Cancellation Device 
 
 ## Project Description
 A low-cost, edge-computing embedded system designed to cancel out 4Hz to 8Hz hand tremors for patients with Parkinson's disease or essential tremors. By utilizing a Proportional-Derivative (PD) loop and a Complementary Filter, the system reads real-time IMU data and actuates micro-servos to keep the spoon perfectly level, replacing prohibitively expensive commercial solutions.
