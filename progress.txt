@@ -1,17 +1,35 @@
-# Hackathon Progress Tracker
+MAJOR ARCHITECTURAL PIVOT
 
-## Current Progress
-* Hardware components acquired and verified (Arduino Uno, MPU6050, MG90S Servos).
-* 12V to 5V Step-down buck converter successfully calibrated for safe servo power.
-* Core complementary filter math drafted for the MPU6050.
+From "Tremor Spoon" to "NeuroGrip Active Stabilizer"
+We realized that stabilizing a single utensil wasn't enough. We pivoted our entire mechanical architecture mid-hackathon to build a wearable, 5-finger exoskeleton glove. This allows us to provide active tremor stabilization for the entire hand, enabling users to not just eat, but write, drink, and perform daily tasks.
 
-## Tasks Completed
-- [x] Repository initialized and all team members added as collaborators.
-- [x] Initial hardware wiring mapped out (I2C bus, common ground setup).
-- [x] Initial draft of `tremor_spoon.ino` created with basic servo attachment.
+Current Status: SYSTEM FULLY OPERATIONAL
 
-## Next Steps
-- [ ] Read raw I2C data from the MPU6050 accelerometer and gyroscope.
-- [ ] Implement the Complementary Filter in C++ to mitigate gyro drift.
-- [ ] Write the PD (Proportional-Derivative) control loop.
-- [ ] Tune Kp and Kd constants to eliminate MG90S metal gear backlash.
+Hardware: 16MHz Arduino Uno driving 7 independent I2C devices and 5 analog servos simultaneously.
+Power Architecture: Segregated logic and muscle power. Successfully integrated an LM2596 Buck Converter (5.0V step-down) to isolate high-current servo loads from the microcontroller.
+Firmware: Custom C++ edge-computing engine with zero-latency PD control loop.
+
+
+Key Engineering Challenges Conquered
+
+During the integration phase, we encountered and solved several complex hardware and silicon-level bugs:
+The Inrush Current Brownout:
+Bug: Booting 5 SG90 servos simultaneously pulled ~4 Amps, collapsing the 5V line and continuously rebooting the Arduino.
+Solution: Engineered a "Silent Staggered Boot" sequence. Servos are initialized without positional commands, then awakened one by one with a 200ms delay to allow the Buck Converter to stabilize the voltage spike.
+Silicon-Level Sensor Freezes (I2C Lockups):
+Bug: The MPU6050 IMU was sending corrupted nan data or freezing entirely on boot due to I2C bus collisions with the PCA9685 and VL53L0X array.
+Solution: Wrote a Hardware Silicon Reset (0x80 command) directly to the MPU's memory registers on startup, followed by a software "Wake-Up Ping" that blocks the main loop until valid gravity vectors are confirmed.
+16-Bit Integer Overflow:
+Bug: Arduino's 16-bit processor crashed when calculating the magnitude of raw gravity vectors (16384 * 16384), returning zeroed angles.
+Solution: Implemented explicit Float Casting prior to IMU trigonometry, preserving the math and restoring the closed-loop feedback.
+SG90 Plastic Gear Protection:
+Bug: Micro-vibrations from the PID loop threatened to strip the plastic gears of the SG90 servos.
+Solution: Developed a Software Deadband Filter (< 1.5 degrees) and tuned the Proportional-Derivative (PD) multipliers to act as shock absorbers, protecting the physical actuators while remaining highly responsive to actual tremors.
+I2C Polling Optimization (Round-Robin):
+Bug: Polling 5 VL53L0X ToF lasers in a single loop created a 150ms delay, destroying the real-time tremor cancellation.
+Solution: Implemented an asynchronous Round-Robin Array. The IMU and servos update at 50Hz+, while the system reads only one laser per loop, maintaining lightning-fast active stabilization alongside multi-finger therapy tracking.
+
+Next Steps (V2.0 Product Vision)
+Transition from SG90 hobby servos to high-torque, solid-state micro-actuators for a slimmer profile.
+Encase hardware in IP68 waterproof, breathable textiles for everyday usability.
+Transition from Arduino Uno to an ESP32 for wireless clinical data logging via BLE.
