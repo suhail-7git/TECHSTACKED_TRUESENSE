@@ -2,91 +2,129 @@
 #include <Servo.h>
 
 // --- Servo Setup ---
-Servo servoPitch; // Up/Down
-Servo servoRoll;  // Left/Right
+Servo servoPitch; // Up/Down (Pin 9)
+Servo servoRoll;  // Left/Right (Pin 10)
 
 const int pitchPin = 9;
 const int rollPin = 10;
 
 // --- MPU6050 Variables ---
-const int MPU_ADDR = 0x68; // I2C address of the MPU-6050
+const int MPU_ADDR = 0x68; 
 int16_t accX, accY, accZ;
 int16_t gyroX, gyroY, gyroZ;
 
-float accAngleRoll, accAnglePitch;
+// Calibration Offsets
+float gyroX_offset = 0, gyroY_offset = 0;
+float accPitch_offset = 0, accRoll_offset = 0;
+
 float roll = 0, pitch = 0;
 
 // --- Timing Variables ---
 unsigned long prevTime;
 float dt;
 
-float Kd = 0.05; // Derivative: The "Shock Absorber". Smooths out the metal gear jitters.
+// --- PD Control Variables ---
+// ⚠️ TUNE THESE TWO NUMBERS TONIGHT ⚠️
+float Kp = 1.0;  // Proportional (Muscle): Try 0.8 to 1.5
+float Kd = 0.08; // Derivative (Shock Absorber): Try 0.05 to 0.15
 
-// Target angle is perfectly flat (0 degrees)
-float targetAngle = 0; 
+float targetAngle = 0; // We want the spoon perfectly flat (0 degrees)
 
 float errorPitch, prevErrorPitch, outputPitch;
 float errorRoll, prevErrorRoll, outputRoll;
 
 void setup() {
-  Serial.begin(115200); // High baud rate so printing doesn't slow down the math
+  Serial.begin(115200); 
   
-  // Attach Servos
+  // 1. Attach Servos and Center Them
   servoPitch.attach(pitchPin);
   servoRoll.attach(rollPin);
-  
-  // Center the servos before doing anything
   servoPitch.write(90);
   servoRoll.write(90);
-  delay(1000); // Give them a second to physically center
 
-  // Initialize MPU6050
+  // 2. Wake up MPU6050
   Wire.begin();
   Wire.beginTransmission(MPU_ADDR);
   Wire.write(0x6B); // Power management register
   Wire.write(0);    // Wake up the MPU-6050
   Wire.endTransmission(true);
+  
+  delay(1000); // Wait for physical servos to stop shaking
 
+  // ==========================================
+  // 3. THE HACKATHON AUTO-CALIBRATION ROUTINE
+  // ==========================================
+  Serial.println("CALIBRATING... DO NOT TOUCH THE SPOON!");
+  
+  for (int i = 0; i < 500; i++) {
+    Wire.beginTransmission(MPU_ADDR);
+    Wire.write(0x3B);
+    Wire.endTransmission(false);
+    Wire.requestFrom(MPU_ADDR, 14, true);
+
+    accX = Wire.read() << 8 | Wire.read();
+    accY = Wire.read() << 8 | Wire.read();
+    accZ = Wire.read() << 8 | Wire.read();
+    Wire.read(); Wire.read(); // Skip temp
+    gyroX = Wire.read() << 8 | Wire.read();
+    gyroY = Wire.read() << 8 | Wire.read();
+    gyroZ = Wire.read() << 8 | Wire.read();
+
+    float tempAccRoll = (atan2(accY, accZ) * 180 / PI);
+    float tempAccPitch = (atan2(-accX, sqrt(accY * accY + accZ * accZ)) * 180 / PI);
+
+    accRoll_offset += tempAccRoll;
+    accPitch_offset += tempAccPitch;
+    gyroX_offset += (gyroX / 131.0);
+    gyroY_offset += (gyroY / 131.0);
+    
+    delay(3);
+  }
+
+  // Calculate the average offset
+  accRoll_offset /= 500.0;
+  accPitch_offset /= 500.0;
+  gyroX_offset /= 500.0;
+  gyroY_offset /= 500.0;
+
+  Serial.println("Calibration Complete!");
+  
   prevTime = millis();
 }
 
 void loop() {
   // 1. Calculate Time Elapsed (dt)
   unsigned long currentTime = millis();
-  dt = (currentTime - prevTime) / 1000.0; // Convert to seconds
+  dt = (currentTime - prevTime) / 1000.0; 
   prevTime = currentTime;
-
-  // Prevent dt from being 0 on the first loop
   if (dt <= 0) return; 
 
   // 2. Read Raw Data from MPU6050
   Wire.beginTransmission(MPU_ADDR);
-  Wire.write(0x3B); // Starting register for Accel Readings
+  Wire.write(0x3B); 
   Wire.endTransmission(false);
-  Wire.requestFrom(MPU_ADDR, 14, true); // Request 14 registers
+  Wire.requestFrom(MPU_ADDR, 14, true); 
 
   accX = Wire.read() << 8 | Wire.read();
   accY = Wire.read() << 8 | Wire.read();
   accZ = Wire.read() << 8 | Wire.read();
-  
-  // Skip Temperature registers (2 bytes)
   Wire.read(); Wire.read(); 
-  
   gyroX = Wire.read() << 8 | Wire.read();
   gyroY = Wire.read() << 8 | Wire.read();
   gyroZ = Wire.read() << 8 | Wire.read();
 
-  // 3. Math: Calculate Accelerometer Angles
-  accAngleRoll = (atan2(accY, accZ) * 180 / PI);
-  accAnglePitch = (atan2(-accX, sqrt(accY * accY + accZ * accZ)) * 180 / PI);
+  // 3. Math: Accelerometer Angles (Minus Offsets)
+  float rawAccRoll = (atan2(accY, accZ) * 180 / PI);
+  float rawAccPitch = (atan2(-accX, sqrt(accY * accY + accZ * accZ)) * 180 / PI);
+  
+  float accAngleRoll = rawAccRoll - accRoll_offset;
+  float accAnglePitch = rawAccPitch - accPitch_offset;
 
-  // 4. Math: Convert Gyro raw data to Degrees Per Second
-  // LSB Sensitivity for +/- 250 deg/s is 131.0
-  float gyroRateRoll = gyroX / 131.0;
-  float gyroRatePitch = gyroY / 131.0;
+  // 4. Math: Gyro Rate (Minus Offsets)
+  float gyroRateRoll = (gyroX / 131.0) - gyroX_offset;
+  float gyroRatePitch = (gyroY / 131.0) - gyroY_offset;
 
-  // 5. The Complementary Filter (The Hackathon Cheat Code)
-  // Trusts the Gyro 98% for fast movements, uses Accel 2% to stop drift.
+  // 5. Complementary Filter (The Anti-Drift Engine)
   roll = 0.98 * (roll + gyroRateRoll * dt) + 0.02 * accAngleRoll;
   pitch = 0.98 * (pitch + gyroRatePitch * dt) + 0.02 * accAnglePitch;
 
@@ -102,11 +140,12 @@ void loop() {
   outputRoll = (Kp * errorRoll) + (Kd * dErrRoll);
   prevErrorRoll = errorRoll;
 
-  // 8. Command the Servos
-   int servoPitchPos = 90 + outputPitch; 
+  // 8. Command the Servos 
+  // IMPORTANT: If a servo moves the WRONG way, change the "+" to a "-" below!
+  int servoPitchPos = 90 + outputPitch; 
   int servoRollPos = 90 + outputRoll;
 
-  // Safety Constraint: Prevent the servos from ripping the plastic bracket apart
+  // Safety Constraint: Stop the servos from destroying the plastic bracket
   servoPitchPos = constrain(servoPitchPos, 30, 150);
   servoRollPos = constrain(servoRollPos, 30, 150);
 
@@ -114,8 +153,7 @@ void loop() {
   servoRoll.write(servoRollPos);
 
   // 9. Serial Output for the Live Graph Demo
-  // Open "Serial Plotter" (Ctrl+Shift+L) in Arduino IDE to see this!
-  Serial.print("Target:0,");
+  Serial.print("Target_0_Deg:0,");
   Serial.print("SpoonPitch:");
   Serial.println(pitch);
 }
