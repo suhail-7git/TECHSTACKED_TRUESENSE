@@ -1,0 +1,121 @@
+#include <Wire.h>
+#include <Servo.h>
+
+// --- Servo Setup ---
+Servo servoPitch; // Up/Down
+Servo servoRoll;  // Left/Right
+
+const int pitchPin = 9;
+const int rollPin = 10;
+
+// --- MPU6050 Variables ---
+const int MPU_ADDR = 0x68; // I2C address of the MPU-6050
+int16_t accX, accY, accZ;
+int16_t gyroX, gyroY, gyroZ;
+
+float accAngleRoll, accAnglePitch;
+float roll = 0, pitch = 0;
+
+// --- Timing Variables ---
+unsigned long prevTime;
+float dt;
+
+float Kd = 0.05; // Derivative: The "Shock Absorber". Smooths out the metal gear jitters.
+
+// Target angle is perfectly flat (0 degrees)
+float targetAngle = 0; 
+
+float errorPitch, prevErrorPitch, outputPitch;
+float errorRoll, prevErrorRoll, outputRoll;
+
+void setup() {
+  Serial.begin(115200); // High baud rate so printing doesn't slow down the math
+  
+  // Attach Servos
+  servoPitch.attach(pitchPin);
+  servoRoll.attach(rollPin);
+  
+  // Center the servos before doing anything
+  servoPitch.write(90);
+  servoRoll.write(90);
+  delay(1000); // Give them a second to physically center
+
+  // Initialize MPU6050
+  Wire.begin();
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x6B); // Power management register
+  Wire.write(0);    // Wake up the MPU-6050
+  Wire.endTransmission(true);
+
+  prevTime = millis();
+}
+
+void loop() {
+  // 1. Calculate Time Elapsed (dt)
+  unsigned long currentTime = millis();
+  dt = (currentTime - prevTime) / 1000.0; // Convert to seconds
+  prevTime = currentTime;
+
+  // Prevent dt from being 0 on the first loop
+  if (dt <= 0) return; 
+
+  // 2. Read Raw Data from MPU6050
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x3B); // Starting register for Accel Readings
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU_ADDR, 14, true); // Request 14 registers
+
+  accX = Wire.read() << 8 | Wire.read();
+  accY = Wire.read() << 8 | Wire.read();
+  accZ = Wire.read() << 8 | Wire.read();
+  
+  // Skip Temperature registers (2 bytes)
+  Wire.read(); Wire.read(); 
+  
+  gyroX = Wire.read() << 8 | Wire.read();
+  gyroY = Wire.read() << 8 | Wire.read();
+  gyroZ = Wire.read() << 8 | Wire.read();
+
+  // 3. Math: Calculate Accelerometer Angles
+  accAngleRoll = (atan2(accY, accZ) * 180 / PI);
+  accAnglePitch = (atan2(-accX, sqrt(accY * accY + accZ * accZ)) * 180 / PI);
+
+  // 4. Math: Convert Gyro raw data to Degrees Per Second
+  // LSB Sensitivity for +/- 250 deg/s is 131.0
+  float gyroRateRoll = gyroX / 131.0;
+  float gyroRatePitch = gyroY / 131.0;
+
+  // 5. The Complementary Filter (The Hackathon Cheat Code)
+  // Trusts the Gyro 98% for fast movements, uses Accel 2% to stop drift.
+  roll = 0.98 * (roll + gyroRateRoll * dt) + 0.02 * accAngleRoll;
+  pitch = 0.98 * (pitch + gyroRatePitch * dt) + 0.02 * accAnglePitch;
+
+  // 6. PD Control Loop: PITCH (Up/Down)
+  errorPitch = targetAngle - pitch;
+  float dErrPitch = (errorPitch - prevErrorPitch) / dt;
+  outputPitch = (Kp * errorPitch) + (Kd * dErrPitch);
+  prevErrorPitch = errorPitch;
+
+  // 7. PD Control Loop: ROLL (Left/Right)
+  errorRoll = targetAngle - roll;
+  float dErrRoll = (errorRoll - prevErrorRoll) / dt;
+  outputRoll = (Kp * errorRoll) + (Kd * dErrRoll);
+  prevErrorRoll = errorRoll;
+
+  // 8. Command the Servos
+   int servoPitchPos = 90 + outputPitch; 
+  int servoRollPos = 90 + outputRoll;
+
+  // Safety Constraint: Prevent the servos from ripping the plastic bracket apart
+  servoPitchPos = constrain(servoPitchPos, 30, 150);
+  servoRollPos = constrain(servoRollPos, 30, 150);
+
+  servoPitch.write(servoPitchPos);
+  servoRoll.write(servoRollPos);
+
+  // 9. Serial Output for the Live Graph Demo
+  // Open "Serial Plotter" (Ctrl+Shift+L) in Arduino IDE to see this!
+  Serial.print("Target:0,");
+  Serial.print("SpoonPitch:");
+  Serial.println(pitch);
+}
