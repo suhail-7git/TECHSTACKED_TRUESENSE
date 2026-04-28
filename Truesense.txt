@@ -24,7 +24,7 @@ unsigned long prevTime;
 float dt;
 
 // --- PD Control Variables ---
-// ⚠️ TUNE THESE TWO NUMBERS TONIGHT ⚠️
+//  TUNE THESE TWO NUMBERS TONIGHT 
 float Kp = 1.0;  // Proportional (Muscle): Try 0.8 to 1.5
 float Kd = 0.08; // Derivative (Shock Absorber): Try 0.05 to 0.15
 
