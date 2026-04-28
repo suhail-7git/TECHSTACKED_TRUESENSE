@@ -1,0 +1,17 @@
+# Hackathon Progress Tracker
+
+## Current Progress
+* Hardware components acquired and verified (Arduino Uno, MPU6050, MG90S Servos).
+* 12V to 5V Step-down buck converter successfully calibrated for safe servo power.
+* Core complementary filter math drafted for the MPU6050.
+
+## Tasks Completed
+- [x] Repository initialized and all team members added as collaborators.
+- [x] Initial hardware wiring mapped out (I2C bus, common ground setup).
+- [x] Initial draft of `tremor_spoon.ino` created with basic servo attachment.
+
+## Next Steps
+- [ ] Read raw I2C data from the MPU6050 accelerometer and gyroscope.
+- [ ] Implement the Complementary Filter in C++ to mitigate gyro drift.
+- [ ] Write the PD (Proportional-Derivative) control loop.
+- [ ] Tune Kp and Kd constants to eliminate MG90S metal gear backlash.
