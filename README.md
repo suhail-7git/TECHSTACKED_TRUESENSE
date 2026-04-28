@@ -1,4 +1,4 @@
-# TECHSTACKED_TRUESENSE: NeuroGrip Active Stabilizer 🦾
+# TECHSTACKED_TRUESENSE: TrueSense Active Stabilizer 🦾
 
 ## Project Description
 The NeuroGrip Active Stabilizer is a wearable, edge-computing exoskeleton designed to assist patients with Parkinson's disease, essential tremors, and stroke-induced spasticity. By fusing data from a 6-DOF IMU and an array of 5 Time-of-Flight (ToF) laser sensors, the glove tracks precise wrist orientation and individual finger mobility in real-time. 
